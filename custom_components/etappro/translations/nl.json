@@ -60,7 +60,7 @@
     },
     "number": {
       "current_setpoint": { "name": "Laadstroom setpoint" },
-      "phases":           { "name": "Laadphasen" }
+      "phases":           { "name": "Laadfasen" }
     },
     "switch": {
       "charging":         { "name": "Laden" }
