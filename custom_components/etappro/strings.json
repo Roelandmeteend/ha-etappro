@@ -1,0 +1,69 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Add ETAPpro EV Charger",
+        "description": "Enter the local IP address of your ETAPpro. You can find it in the ETAPpro app or in your router.",
+        "data": {
+          "host": "IP Address",
+          "port": "Modbus TCP Port"
+        },
+        "data_description": {
+          "host": "Local IP address of the ETAPpro (e.g. 192.168.1.42)",
+          "port": "Default port is 502"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Cannot connect. Check the IP address and verify the ETAPpro is online.",
+      "unknown": "Unknown error. Check the Home Assistant logs."
+    },
+    "abort": {
+      "already_configured": "This ETAPpro is already configured."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "ETAPpro Options",
+        "data": {
+          "scan_interval": "Polling interval (seconds)"
+        },
+        "data_description": {
+          "scan_interval": "How often to poll the charger. Default: 10 seconds."
+        }
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "status":           { "name": "Status" },
+      "mode":             { "name": "Mode (IEC 61851)" },
+      "voltage_l1":       { "name": "Voltage L1" },
+      "voltage_l2":       { "name": "Voltage L2" },
+      "voltage_l3":       { "name": "Voltage L3" },
+      "current_l1":       { "name": "Current L1" },
+      "current_l2":       { "name": "Current L2" },
+      "current_l3":       { "name": "Current L3" },
+      "current_sum":      { "name": "Total current" },
+      "power_l1":         { "name": "Power L1" },
+      "power_l2":         { "name": "Power L2" },
+      "power_l3":         { "name": "Power L3" },
+      "power_sum":        { "name": "Total power" },
+      "energy_kwh":       { "name": "Total energy" },
+      "temp_board":       { "name": "Board temperature" },
+      "temp_ev_plug":     { "name": "EV plug temperature" },
+      "temp_grid_plug":   { "name": "Grid plug temperature" },
+      "applied_current":  { "name": "Applied max current" },
+      "max_current_hw":   { "name": "Hardware max current" },
+      "started_by":       { "name": "Started by" }
+    },
+    "number": {
+      "current_setpoint": { "name": "Current setpoint" },
+      "phases":           { "name": "Charging phases" }
+    },
+    "switch": {
+      "charging":         { "name": "Charging" }
+    }
+  }
+}

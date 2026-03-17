@@ -1,0 +1,69 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "ETAPpro laadpaal toevoegen",
+        "description": "Vul het lokale IP-adres in van je ETAPpro. Je vindt dit in de ETAPpro app of in je router.",
+        "data": {
+          "host": "IP-adres",
+          "port": "Modbus TCP poort"
+        },
+        "data_description": {
+          "host": "Lokaal IP-adres van de ETAPpro (bijv. 192.168.1.42)",
+          "port": "Standaardpoort is 502"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Kan niet verbinden. Controleer het IP-adres en of de ETAPpro online is.",
+      "unknown": "Onbekende fout. Raadpleeg de Home Assistant-logs."
+    },
+    "abort": {
+      "already_configured": "Deze ETAPpro is al geconfigureerd."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "ETAPpro opties",
+        "data": {
+          "scan_interval": "Polling-interval (seconden)"
+        },
+        "data_description": {
+          "scan_interval": "Hoe vaak de laadpaal uitgelezen wordt. Standaard: 10 seconden."
+        }
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "status":           { "name": "Status" },
+      "mode":             { "name": "Modus (IEC 61851)" },
+      "voltage_l1":       { "name": "Spanning L1" },
+      "voltage_l2":       { "name": "Spanning L2" },
+      "voltage_l3":       { "name": "Spanning L3" },
+      "current_l1":       { "name": "Laadstroom L1" },
+      "current_l2":       { "name": "Laadstroom L2" },
+      "current_l3":       { "name": "Laadstroom L3" },
+      "current_sum":      { "name": "Laadstroom totaal" },
+      "power_l1":         { "name": "Vermogen L1" },
+      "power_l2":         { "name": "Vermogen L2" },
+      "power_l3":         { "name": "Vermogen L3" },
+      "power_sum":        { "name": "Laadvermogen totaal" },
+      "energy_kwh":       { "name": "Energie totaal" },
+      "temp_board":       { "name": "Temperatuur board" },
+      "temp_ev_plug":     { "name": "Temperatuur stekker auto" },
+      "temp_grid_plug":   { "name": "Temperatuur netstekker" },
+      "applied_current":  { "name": "Toegepaste max stroom" },
+      "max_current_hw":   { "name": "Hardware max stroom" },
+      "started_by":       { "name": "Gestart door" }
+    },
+    "number": {
+      "current_setpoint": { "name": "Laadstroom setpoint" },
+      "phases":           { "name": "Laadphasen" }
+    },
+    "switch": {
+      "charging":         { "name": "Laden" }
+    }
+  }
+}
