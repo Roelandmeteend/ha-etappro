@@ -15,7 +15,7 @@ Disclaimer: This integration was made with support of AI tools
 
 1. Go to **HACS → Integrations** in Home Assistant
 2. Click the three dots (⋮) in the top right → **Custom repositories**
-3. Add: `https://github.com/YOUR-USERNAME/ha-etappro`  
+3. Add: `https://github.com/Roelandmeteend/ha-etappro`  
    Category: **Integration**
 4. Search for "ETAPpro" and click **Download**
 5. Restart Home Assistant
