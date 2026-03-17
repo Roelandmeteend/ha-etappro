@@ -8,6 +8,7 @@ No cloud, no API key — only the local IP address of your charger is required.
 Based on the official register map: [EV-Chargeking/etap-modbus](https://github.com/EV-Chargeking/etap-modbus)
 
 Disclaimer: This integration was made with support of AI tools
+
 ---
 
 ## Installation via HACS
