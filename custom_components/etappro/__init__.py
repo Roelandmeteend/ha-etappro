@@ -12,7 +12,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_HOST, CONF_PORT, CONF_SCAN_INTERVAL, Platform
 from homeassistant.core import HomeAssistant
 
-from .const import DOMAIN, SCAN_INTERVAL_FAST
+from .const import DOMAIN, SCAN_INTERVAL_FAST, VERSION
 from .coordinator import ETAPproCoordinator
 from .modbus_client import ETAPproModbusClient
 
@@ -23,6 +23,7 @@ PLATFORMS = [Platform.SENSOR, Platform.NUMBER, Platform.SWITCH]
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up the ETAPpro integration from a config entry."""
+    _LOGGER.debug("ETAPpro integration version %s starting", VERSION)
     host = entry.data[CONF_HOST]
     port = entry.data[CONF_PORT]
 
