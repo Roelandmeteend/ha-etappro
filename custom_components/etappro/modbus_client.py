@@ -217,7 +217,9 @@ class ETAPproModbusClient:
                 "temp_ev_plug":     self._safe("temp_ev_plug",     f32,   1106),
                 "temp_grid_plug":   self._safe("temp_grid_plug",   f32,   1108),
                 # Status
-                "max_current_hw":   self._safe("max_current_hw",   f32,   1100),
+                # Register 1100 returns mA despite documentation stating A
+                "max_current_hw":   self._safe("max_current_hw",
+                                        lambda a: round(self._float32(sock, a) / 1000, 1), 1100),
                 "availability":     self._safe("availability",     self._int16,  sock, 1200),
                 "mode":             self._safe("mode",             self._string, sock, 1201, 5),
                 "applied_current":  self._safe("applied_current",  f32,   1206),
