@@ -5,7 +5,7 @@ https://github.com/EV-Chargeking/etap-modbus
 """
 
 DOMAIN = "etappro"
-VERSION = "1.0.1"
+VERSION = "1.0.2"
 DEFAULT_PORT = 502
 SCAN_INTERVAL_FAST = 10    # seconden — stroom, vermogen, modus
 SCAN_INTERVAL_MEDIUM = 30  # seconden — spanning, temperatuur

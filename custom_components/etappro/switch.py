@@ -88,6 +88,7 @@ class ETAPproChargingSwitch(CoordinatorEntity[ETAPproCoordinator], SwitchEntity)
         except ETAPproModbusError as err:
             _LOGGER.error("ETAPpro: failed to resume charging: %s", err)
             return
+        self.coordinator.set_desired_setpoint(setpoint)
         await self.coordinator.async_request_refresh()
 
     async def async_turn_off(self, **kwargs) -> None:
@@ -104,4 +105,5 @@ class ETAPproChargingSwitch(CoordinatorEntity[ETAPproCoordinator], SwitchEntity)
         except ETAPproModbusError as err:
             _LOGGER.error("ETAPpro: failed to pause charging: %s", err)
             return
+        self.coordinator.set_desired_setpoint(0)
         await self.coordinator.async_request_refresh()
