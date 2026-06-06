@@ -1,7 +1,7 @@
 {
   "domain": "etappro",
   "name": "ETAPpro EV Charger",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "documentation": "https://github.com/EV-Chargeking/etap-modbus",
   "issue_tracker": "",
   "dependencies": [],
