@@ -76,6 +76,7 @@ class ETAPproCurrentSetpoint(CoordinatorEntity[ETAPproCoordinator], NumberEntity
         await self.hass.async_add_executor_job(
             self.coordinator.client.set_current_setpoint, value
         )
+        self.coordinator.set_desired_setpoint(value)
         await self.coordinator.async_request_refresh()
 
 
