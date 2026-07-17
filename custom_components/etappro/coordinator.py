@@ -8,14 +8,25 @@ from typing import Any
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
-from .const import DOMAIN, MIN_CURRENT_A, SCAN_INTERVAL_FAST
+from .const import DOMAIN, SCAN_INTERVAL_FAST
 from .modbus_client import ETAPproModbusClient, ETAPproModbusError
 
 _LOGGER = logging.getLogger(__name__)
 
 
 class ETAPproCoordinator(DataUpdateCoordinator[dict[str, Any]]):
-    """Haalt periodiek alle data op via Modbus TCP."""
+    """Haalt periodiek alle data op via Modbus TCP.
+
+    HA-sturing is gekoppeld aan een laadsessie:
+      - De sessie is actief zodra de lader laadt (IEC 61851 modus C) en blijft
+        actief tijdens pauzes (modus B) tot de auto loskoppelt (modus A).
+      - Alleen tijdens een actieve sessie schrijft de coordinator het gewenste
+        setpoint bij elke poll opnieuw (keepalive), zodat de lader de door HA /
+        automatiseringen ingestelde waarde niet naar zijn eigen config terugzet.
+      - Zodra de lader vrij is (modus A) laat HA volledig los: geen keepalive en
+        het gewenste setpoint wordt gewist, klaar voor een nieuwe sessie
+        (gestart via laadpas of de HA "Laden"-schakelaar).
+    """
 
     def __init__(
         self,
@@ -25,13 +36,11 @@ class ETAPproCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     ) -> None:
         self.client = client
         self.charger_name = charger_name
-        # Gewenste setpoint ingesteld vanuit HA; wordt bij elke poll hergeschreven
-        # als keepalive zodat de lader niet terugvalt op zijn eigen configuratie.
-        # None betekent: HA-sturing inactief, lader beheert zichzelf.
+        # Gewenste setpoint ingesteld vanuit HA/automatiseringen; wordt tijdens
+        # een actieve sessie bij elke poll hergeschreven als keepalive.
         self._desired_setpoint: float | None = None
-        # Vorige modusletter (A/B/C/E/F); None bij eerste poll om onterechte
-        # auto-activatie bij HA-opstart te voorkomen.
-        self._prev_mode_prefix: str | None = None
+        # True zolang er een laadsessie loopt (modus C gezien, nog geen modus A).
+        self._session_active: bool = False
 
         super().__init__(
             hass,
@@ -40,24 +49,20 @@ class ETAPproCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             update_interval=timedelta(seconds=SCAN_INTERVAL_FAST),
         )
 
-    @property
-    def desired_setpoint(self) -> float | None:
-        return self._desired_setpoint
-
     def set_desired_setpoint(self, ampere: float | None) -> None:
-        """Sla de gewenste setpoint op; wordt bij elke poll als keepalive geschreven."""
+        """Sla het gewenste setpoint op; tijdens een sessie wordt dit als keepalive geschreven."""
         self._desired_setpoint = ampere
 
     async def _async_update_data(self) -> dict[str, Any]:
-        """Lees alle Modbus-registers, activeer/deactiveer HA-sturing op sessiewijziging."""
+        """Lees alle Modbus-registers en onderhoud de keepalive tijdens een sessie."""
         try:
             data = await self.hass.async_add_executor_job(self.client.read_all)
         except ETAPproModbusError as err:
             raise UpdateFailed(f"ETAPpro Modbus-fout: {err}") from err
 
-        self._handle_session_transition(data)
+        self._update_session_state(data)
 
-        if self._desired_setpoint is not None:
+        if self._session_active and self._desired_setpoint is not None:
             try:
                 await self.hass.async_add_executor_job(
                     self.client.set_current_setpoint, self._desired_setpoint
@@ -70,47 +75,22 @@ class ETAPproCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         return data
 
-    def _handle_session_transition(self, data: dict[str, Any]) -> None:
-        """Schakel HA-sturing automatisch in/uit op basis van laadsessie-overgangen.
+    def _update_session_state(self, data: dict[str, Any]) -> None:
+        """Werk de sessie-latch bij op basis van de IEC 61851 modus.
 
-        Overgang A → B of C: sessie gestart (RFID, app of vrij laden)
-            → HA-sturing inschakelen zodat automaties (peakshaving, solar, ...)
-              direct controle hebben over het laadstroom setpoint.
-
-        Overgang B/C → A: sessie beëindigd (auto losgekoppeld)
-            → HA-sturing uitschakelen zodat de lader zichzelf beheert.
-
-        Bij de eerste poll wordt geen overgang verwerkt om te voorkomen dat
-        HA-sturing onterecht inschakelt als HA herstart terwijl een sessie loopt.
+        Modus A → vrij: sessie beëindigd, HA laat volledig los.
+        Modus C → laden: sessie actief.
+        Modus B (of fout E/F): latch ongewijzigd — pauze binnen een sessie
+            als die al liep, of nog geen sessie als er nog niet geladen is.
         """
         mode_prefix = (data.get("mode") or "A")[:1].upper()
 
-        if self._prev_mode_prefix is None:
-            # Eerste poll: toestand opslaan zonder actie.
-            self._prev_mode_prefix = mode_prefix
-            return
-
-        was_idle = self._prev_mode_prefix == "A"
-        is_active = mode_prefix in ("B", "C")
-        was_active = self._prev_mode_prefix in ("B", "C")
-        is_idle = mode_prefix == "A"
-
-        if was_idle and is_active and self._desired_setpoint is None:
-            # Nieuwe sessie gedetecteerd: HA-sturing inschakelen.
-            setpoint = data.get("setpoint_current")
-            self._desired_setpoint = max(float(setpoint), MIN_CURRENT_A) if setpoint else MIN_CURRENT_A
-            _LOGGER.info(
-                "ETAPpro: laadsessie gestart (modus %s), HA-sturing automatisch ingeschakeld op %.1f A",
-                mode_prefix, self._desired_setpoint,
-            )
-
-        elif was_active and is_idle:
-            # Sessie beëindigd: HA-sturing uitschakelen.
-            if self._desired_setpoint is not None:
-                _LOGGER.info(
-                    "ETAPpro: laadsessie beëindigd (modus %s → A), HA-sturing automatisch uitgeschakeld",
-                    self._prev_mode_prefix,
-                )
+        if mode_prefix == "A":
+            if self._session_active:
+                _LOGGER.info("ETAPpro: laadsessie beëindigd (lader vrij), HA laat los")
+            self._session_active = False
             self._desired_setpoint = None
-
-        self._prev_mode_prefix = mode_prefix
+        elif mode_prefix == "C":
+            if not self._session_active:
+                _LOGGER.info("ETAPpro: laadsessie gestart (modus C), HA-sturing actief")
+            self._session_active = True

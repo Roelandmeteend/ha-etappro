@@ -1,4 +1,4 @@
-"""Switch platform voor de ETAPpro — laden starten/pauzeren en HA-sturing."""
+"""Switch platform voor de ETAPpro — laden starten en pauzeren."""
 from __future__ import annotations
 
 import logging
@@ -24,18 +24,16 @@ async def async_setup_entry(
     entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    """Register switch entities."""
+    """Register the charging switch."""
     coordinator: ETAPproCoordinator = hass.data[DOMAIN][entry.entry_id]
-    async_add_entities([
-        ETAPproChargingSwitch(coordinator, entry),
-        ETAPproHAControl(coordinator, entry),
-    ])
+    async_add_entities([ETAPproChargingSwitch(coordinator, entry)])
 
 
 class ETAPproChargingSwitch(CoordinatorEntity[ETAPproCoordinator], SwitchEntity):
     """Schakelaar om laden te starten of te pauzeren.
 
     AAN  — herstelt het laatste setpoint (minimaal 6 A) naar register 1210.
+           Dit is één van de twee manieren om een sessie te starten.
     UIT  — schrijft 0 A naar register 1210, waardoor laden pauzeert.
     """
 
@@ -75,15 +73,15 @@ class ETAPproChargingSwitch(CoordinatorEntity[ETAPproCoordinator], SwitchEntity)
         return {"resume_setpoint_a": self._last_setpoint}
 
     async def async_turn_on(self, **kwargs) -> None:
-        """Hervat laden met het vorige setpoint (minimaal 6 A)."""
+        """Hervat/start laden met het vorige setpoint (minimaal 6 A)."""
         setpoint = max(self._last_setpoint, MIN_CURRENT_A)
-        _LOGGER.debug("ETAPpro: laden hervatten op %.1f A", setpoint)
+        _LOGGER.debug("ETAPpro: laden starten op %.1f A", setpoint)
         try:
             await self.hass.async_add_executor_job(
                 self.coordinator.client.set_current_setpoint, setpoint
             )
         except ETAPproModbusError as err:
-            _LOGGER.error("ETAPpro: laden hervatten mislukt: %s", err)
+            _LOGGER.error("ETAPpro: laden starten mislukt: %s", err)
             return
         self.coordinator.set_desired_setpoint(setpoint)
         await self.coordinator.async_request_refresh()
@@ -103,49 +101,4 @@ class ETAPproChargingSwitch(CoordinatorEntity[ETAPproCoordinator], SwitchEntity)
             _LOGGER.error("ETAPpro: laden pauzeren mislukt: %s", err)
             return
         self.coordinator.set_desired_setpoint(0)
-        await self.coordinator.async_request_refresh()
-
-
-class ETAPproHAControl(CoordinatorEntity[ETAPproCoordinator], SwitchEntity):
-    """Schakelaar om HA-sturing (Modbus keepalive) aan of uit te zetten.
-
-    AAN  — HA schrijft bij elke poll het setpoint opnieuw naar de lader.
-           Gebruik dit voor slimme laadautomatisering vanuit HA.
-    UIT  — HA laat de lader met rust. De laadpaal beheert zichzelf,
-           inclusief laden via laadpas (RFID).
-    """
-
-    _attr_has_entity_name = True
-    _attr_translation_key = "ha_control"
-    _attr_icon = "mdi:home-lightning-bolt"
-
-    def __init__(self, coordinator: ETAPproCoordinator, entry: ConfigEntry) -> None:
-        super().__init__(coordinator)
-        self._attr_unique_id = f"{entry.entry_id}_ha_control"
-        self._attr_device_info = DeviceInfo(
-            identifiers={(DOMAIN, entry.entry_id)},
-            name=coordinator.charger_name,
-            manufacturer="EVchargeking",
-            model="ETAPpro",
-        )
-
-    @property
-    def is_on(self) -> bool:
-        """AAN als HA actief het setpoint beheert (keepalive actief)."""
-        return self.coordinator.desired_setpoint is not None
-
-    async def async_turn_on(self, **kwargs) -> None:
-        """Activeer HA-sturing: neem het huidige setpoint over als startwaarde."""
-        current = None
-        if self.coordinator.data:
-            current = self.coordinator.data.get("setpoint_current")
-        setpoint = float(current) if current and current >= MIN_CURRENT_A else MIN_CURRENT_A
-        self.coordinator.set_desired_setpoint(setpoint)
-        _LOGGER.debug("ETAPpro: HA-sturing ingeschakeld op %.1f A", setpoint)
-        await self.coordinator.async_request_refresh()
-
-    async def async_turn_off(self, **kwargs) -> None:
-        """Deactiveer HA-sturing: lader beheert zichzelf (RFID werkt weer)."""
-        self.coordinator.set_desired_setpoint(None)
-        _LOGGER.debug("ETAPpro: HA-sturing uitgeschakeld")
         await self.coordinator.async_request_refresh()
