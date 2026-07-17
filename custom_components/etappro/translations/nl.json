@@ -63,7 +63,8 @@
       "phases":           { "name": "Laadfasen" }
     },
     "switch": {
-      "charging":         { "name": "Laden" }
+      "charging":         { "name": "Laden" },
+      "ha_control":       { "name": "HA-sturing" }
     }
   }
 }
