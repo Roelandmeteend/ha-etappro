@@ -63,8 +63,7 @@
       "phases":           { "name": "Charging phases" }
     },
     "switch": {
-      "charging":         { "name": "Charging" },
-      "ha_control":       { "name": "HA control" }
+      "charging":         { "name": "Charging" }
     }
   }
 }
