@@ -37,7 +37,11 @@ class ETAPproCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             update_interval=timedelta(seconds=SCAN_INTERVAL_FAST),
         )
 
-    def set_desired_setpoint(self, ampere: float) -> None:
+    @property
+    def desired_setpoint(self) -> float | None:
+        return self._desired_setpoint
+
+    def set_desired_setpoint(self, ampere: float | None) -> None:
         """Sla de gewenste setpoint op; wordt bij elke poll als keepalive geschreven."""
         self._desired_setpoint = ampere
 
