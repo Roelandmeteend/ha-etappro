@@ -1,34 +1,31 @@
-"""Modbus TCP client voor de ETAPpro laadpaal.
+"""Modbus TCP client for the ETAPpro EV charger.
 
-Geïmplementeerd met rauwe TCP-sockets om versieconflicten met pymodbus te
-vermijden (Home Assistant levert zijn eigen pymodbus mee voor de ingebouwde
-modbus-integratie).
+Implemented with raw TCP sockets to avoid version conflicts with pymodbus
+(Home Assistant ships its own copy for the built-in modbus integration).
 
-Ontwerpkeuzes:
+Design choices:
 
-* **Blokgewijs lezen.** Aaneengesloten registers worden in één FC03-request
-  opgehaald. Dat brengt een volledige poll terug van 27 losse round-trips naar
-  een handvol, wat de kans op storingen op het kleine embedded apparaat sterk
-  verkleint.
+* **Block reads.** Contiguous registers are fetched in a single FC03 request.
+  That takes a full poll from 27 separate round-trips down to a handful, which
+  markedly reduces the chance of upsetting the small embedded device.
 
-* **Afbreken bij transportfouten.** Een Modbus *exception response* (bijv.
-  "illegal data address") laat de socket schoon achter — dat register slaan we
-  over en we gaan verder. Een transportfout — timeout, reset, of een
-  transaction-ID die niet klopt — betekent dat er ongelezen bytes in de buffer
-  staan. Doorgaan op zo'n socket laat élke volgende read de restanten van het
-  vorige antwoord als header interpreteren, waardoor de hele poll omvalt.
-  Daarom wordt de poll dan afgebroken en start de volgende met een verse
-  verbinding.
+* **Abort on transport errors.** A Modbus *exception response* (e.g. "illegal
+  data address") leaves the socket clean — skip that register and carry on. A
+  transport error — timeout, reset, or a transaction ID that does not match —
+  means unread bytes are still in the buffer. Continuing on such a socket makes
+  every subsequent read interpret the tail of the previous response as its
+  header, which brings down the whole poll. So the poll is aborted and the next
+  one starts on a fresh connection.
 
-* **Eén verbinding per operatie, onder een lock.** De ETAPpro accepteert maar
-  één Modbus-verbinding tegelijk. Het lock voorkomt dat een keepalive-write en
-  een lopende poll elkaar in de weg zitten.
+* **One connection per operation, behind a lock.** The ETAPpro accepts only one
+  Modbus connection at a time; the lock keeps a keepalive write from cutting
+  into a running poll.
 
-* **Onthouden wat niet bestaat.** Registers die de firmware niet ondersteunt
-  (bijv. de energieteller op 374) worden na de eerste weigering overgeslagen in
-  plaats van elke poll opnieuw geprobeerd.
+* **Remember what does not exist.** Registers the firmware does not support
+  (e.g. the energy counter at 374) are skipped after the first refusal instead
+  of being retried on every poll.
 
-Registeradressen: https://github.com/EV-Chargeking/etap-modbus
+Register addresses: https://github.com/EV-Chargeking/etap-modbus
 """
 from __future__ import annotations
 
@@ -47,60 +44,60 @@ _FC_WRITE_SINGLE = 0x06
 _FC_WRITE_MULTIPLE = 0x10
 _TIMEOUT = 5
 
-# Datatypes
+# Data types
 _F32 = "f32"
 _F64 = "f64"
 _I16 = "i16"
 _U16 = "u16"
 _STR = "str"
 
-# Aantal registers per datatype (_STR heeft een eigen lengte per veld)
+# Register count per data type (_STR carries its own length per field)
 _REGISTER_SPAN = {_F32: 2, _F64: 4, _I16: 1, _U16: 1}
 
 
 class ETAPproModbusError(Exception):
-    """Basisfout voor alle Modbus-communicatieproblemen."""
+    """Base error for all Modbus communication problems."""
 
 
 class ETAPproTransportError(ETAPproModbusError):
-    """Socket is onbruikbaar geworden (timeout, reset, framing uit sync).
+    """The socket has become unusable (timeout, reset, framing out of sync).
 
-    Er kunnen ongelezen bytes in de buffer staan; verder lezen op deze
-    verbinding levert gegarandeerd rommel op. De poll moet afgebroken worden.
+    Unread bytes may remain in the buffer; reading further on this connection
+    is guaranteed to return garbage. The poll must be aborted.
     """
 
 
 class ETAPproRegisterError(ETAPproModbusError):
-    """De lader antwoordde met een Modbus exception response.
+    """The charger replied with a Modbus exception response.
 
-    Het protocol is netjes gevolgd, de socket is schoon: dit register bestaat
-    niet of is niet leesbaar, maar de rest van de poll kan gewoon doorgaan.
+    The protocol was followed correctly and the socket is clean: this register
+    does not exist or cannot be read, but the rest of the poll can continue.
     """
 
 
 @dataclass(frozen=True)
 class _Field:
-    """Eén uitleesbare waarde binnen een registerblok."""
+    """A single readable value within a register block."""
 
     key: str
     address: int
     kind: str
-    length: int = 1            # aantal registers (alleen voor _STR)
+    length: int = 1              # register count (only used for _STR)
     decimals: int | None = None
-    auto_scale_ma: bool = False  # zie _decode()
+    auto_scale_ma: bool = False  # see _decode()
 
 
 @dataclass(frozen=True)
 class _Block:
-    """Een aaneengesloten reeks registers die in één request gelezen wordt."""
+    """A contiguous range of registers fetched in one request."""
 
     start: int
     count: int
     fields: tuple[_Field, ...]
 
 
-# Registerblokken. De grenzen volgen de gedocumenteerde, aaneengesloten
-# groepen; gaten met onbekende registers worden meegelezen maar genegeerd.
+# Register blocks. The boundaries follow the documented contiguous groups; gaps
+# holding unknown registers are read along with the rest and then ignored.
 _BLOCKS: tuple[_Block, ...] = (
     _Block(306, 6, (
         _Field("voltage_l1", 306, _F32, decimals=1),
@@ -145,31 +142,31 @@ _ALL_KEYS = tuple(f.key for b in _BLOCKS for f in b.fields)
 
 
 class ETAPproModbusClient:
-    """Modbus TCP client voor de ETAPpro laadpaal.
+    """Modbus TCP client for the ETAPpro EV charger.
 
-    Wordt aangeroepen via hass.async_add_executor_job(), zodat de HA event loop
-    nooit geblokkeerd wordt. Alle socketgebruik loopt door een lock omdat de
-    lader maar één verbinding tegelijk aankan.
+    Called via hass.async_add_executor_job() so the HA event loop is never
+    blocked. All socket use runs behind a lock because the charger can only
+    handle one connection at a time.
     """
 
     def __init__(self, host: str, port: int) -> None:
-        # Poort eruit halen als die per ongeluk in het host-veld is ingevuld
+        # Strip the port if it was accidentally typed into the host field
         if ":" in host:
             host = host.split(":")[0]
         self._host = host
         self._port = port
         self._transaction_id = 0
         self._lock = threading.Lock()
-        # Registers die de firmware niet ondersteunt; niet opnieuw proberen.
+        # Registers the firmware does not support; do not retry these.
         self._unsupported: set[str] = set()
-        # Blokken die per register gelezen moeten worden omdat het blok als
-        # geheel geweigerd wordt.
+        # Blocks that must be read register by register because the block as a
+        # whole is refused.
         self._split_blocks: set[int] = set()
 
-    # -- Verbindingsbeheer ---------------------------------------
+    # -- Connection management -----------------------------------
 
     def _open_connection(self) -> socket.socket:
-        """Open en retourneer een verse TCP-verbinding naar de lader."""
+        """Open and return a fresh TCP connection to the charger."""
         try:
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             sock.settimeout(_TIMEOUT)
@@ -178,23 +175,23 @@ class ETAPproModbusClient:
             return sock
         except OSError as err:
             raise ETAPproTransportError(
-                f"Kan niet verbinden met {self._host}:{self._port} — {err}"
+                f"Cannot connect to {self._host}:{self._port} — {err}"
             ) from err
 
     def disconnect(self) -> None:
-        """No-op: verbindingen worden na elke operatie gesloten."""
+        """No-op: connections are closed after every operation."""
 
-    # -- Rauwe Modbus TCP framing --------------------------------
+    # -- Raw Modbus TCP framing ----------------------------------
 
     def _next_transaction_id(self) -> int:
         self._transaction_id = (self._transaction_id + 1) % 0xFFFF
         return self._transaction_id
 
     def _send_request(self, sock: socket.socket, pdu: bytes) -> bytes:
-        """Verstuur een PDU in een MBAP-header en geef de response-PDU terug.
+        """Send a PDU wrapped in an MBAP header and return the response PDU.
 
-        Elke fout hier is een transportfout: de aanroeper moet de verbinding
-        weggooien in plaats van er nog een request overheen te sturen.
+        Every failure here is a transport error: the caller must discard the
+        connection rather than push another request over it.
         """
         tid = self._next_transaction_id()
         mbap = struct.pack(">HHHB", tid, 0, len(pdu) + 1, _UNIT_ID)
@@ -203,28 +200,28 @@ class ETAPproModbusClient:
             header = self._recv_exactly(sock, 6)
             resp_tid, _, resp_len = struct.unpack(">HHH", header)
             if resp_tid != tid:
-                # De byte-stream loopt niet meer synchroon: we lezen het staartje
-                # van een eerder (te laat gearriveerd) antwoord. Niet te redden
-                # op deze verbinding.
+                # The byte stream is no longer in sync: we are reading the tail
+                # of an earlier (late-arriving) response. Not recoverable on
+                # this connection.
                 raise ETAPproTransportError(
-                    f"Transaction ID komt niet overeen: verstuurd {tid}, ontvangen {resp_tid}"
+                    f"Transaction ID mismatch: sent {tid}, received {resp_tid}"
                 )
             body = self._recv_exactly(sock, resp_len)
-            return body[1:]  # unit-id byte eraf
+            return body[1:]  # strip the unit id byte
         except OSError as err:
-            raise ETAPproTransportError(f"Communicatiefout: {err}") from err
+            raise ETAPproTransportError(f"Communication error: {err}") from err
 
     def _recv_exactly(self, sock: socket.socket, n: int) -> bytes:
-        """Lees exact n bytes van de socket."""
+        """Read exactly n bytes from the socket."""
         data = b""
         while len(data) < n:
             chunk = sock.recv(n - len(data))
             if not chunk:
-                raise ETAPproTransportError("Verbinding gesloten door de lader")
+                raise ETAPproTransportError("Connection closed by the charger")
             data += chunk
         return data
 
-    # -- Modbus functiecodes -------------------------------------
+    # -- Modbus function codes -----------------------------------
 
     def _read_holding_registers(
         self, sock: socket.socket, address: int, count: int
@@ -234,13 +231,14 @@ class ETAPproModbusClient:
         response = self._send_request(sock, pdu)
         if response[0] & 0x80:
             raise ETAPproRegisterError(
-                f"Modbus exception op FC03, adres {address}: code {response[1]}"
+                f"Modbus exception on FC03, address {address}: code {response[1]}"
             )
         byte_count = response[1]
         if byte_count != count * 2:
-            # Antwoord past niet bij de vraag; behandel als framing-probleem.
+            # The response does not match the request; treat as a framing problem.
             raise ETAPproTransportError(
-                f"Onverwachte byte count op adres {address}: {byte_count}, verwacht {count * 2}"
+                f"Unexpected byte count at address {address}: "
+                f"{byte_count}, expected {count * 2}"
             )
         return [
             struct.unpack(">H", response[2 + i * 2: 4 + i * 2])[0]
@@ -255,7 +253,7 @@ class ETAPproModbusClient:
         response = self._send_request(sock, pdu)
         if response[0] & 0x80:
             raise ETAPproRegisterError(
-                f"Modbus exception op FC06, adres {address}: code {response[1]}"
+                f"Modbus exception on FC06, address {address}: code {response[1]}"
             )
 
     def _write_multiple_registers(
@@ -268,13 +266,13 @@ class ETAPproModbusClient:
         response = self._send_request(sock, pdu)
         if response[0] & 0x80:
             raise ETAPproRegisterError(
-                f"Modbus exception op FC16, adres {address}: code {response[1]}"
+                f"Modbus exception on FC16, address {address}: code {response[1]}"
             )
 
-    # -- Decodering ----------------------------------------------
+    # -- Decoding ------------------------------------------------
 
     def _decode(self, field: _Field, regs: list[int], base: int) -> Any:
-        """Decodeer één veld uit een gelezen registerblok."""
+        """Decode a single field out of a register block that was read."""
         off = field.address - base
 
         if field.kind == _I16:
@@ -289,20 +287,20 @@ class ETAPproModbusClient:
         elif field.kind == _F64:
             value = struct.unpack(">d", struct.pack(">HHHH", *regs[off:off + 4]))[0]
         else:
-            raise ValueError(f"Onbekend datatype: {field.kind}")
+            raise ValueError(f"Unknown data type: {field.kind}")
 
         if field.auto_scale_ma and value > 100:
-            # Sommige firmwareversies geven dit register in milliampère terug,
-            # ondanks dat de documentatie ampère vermeldt. Een laadpaal doet
-            # realistisch 6–63 A, dus alles boven 100 is mA.
+            # Some firmware versions return this register in milliamperes even
+            # though the documentation states amperes. A charger realistically
+            # does 6-63 A, so anything above 100 is mA.
             value = value / 1000
 
         return round(value, field.decimals) if field.decimals is not None else value
 
-    # -- Publieke methodes ---------------------------------------
+    # -- Public methods ------------------------------------------
 
     def test_connection(self) -> bool:
-        """Controleer de verbinding door het beschikbaarheidsregister te lezen."""
+        """Verify the connection by reading the availability register."""
         with self._lock:
             sock = self._open_connection()
             try:
@@ -312,11 +310,11 @@ class ETAPproModbusClient:
                 sock.close()
 
     def read_all(self) -> dict[str, Any]:
-        """Lees alle registers over één verbinding, blokgewijs.
+        """Read every register over a single connection, block by block.
 
-        Registers die de firmware niet ondersteunt komen terug als None. Bij een
-        transportfout wordt ETAPproTransportError opgegooid en is de hele poll
-        mislukt — doorgaan op een ontregelde socket levert alleen maar rommel op.
+        Registers the firmware does not support come back as None. On a
+        transport error ETAPproTransportError is raised and the whole poll has
+        failed — continuing on a desynchronised socket only yields garbage.
         """
         data: dict[str, Any] = dict.fromkeys(_ALL_KEYS)
 
@@ -335,11 +333,11 @@ class ETAPproModbusClient:
                     try:
                         regs = self._read_holding_registers(sock, block.start, block.count)
                     except ETAPproRegisterError as err:
-                        # Het blok als geheel wordt geweigerd; probeer voortaan
-                        # elk register apart, dan verliezen we alleen wat écht
-                        # ontbreekt.
+                        # The block as a whole is refused; from now on read each
+                        # register separately so we only lose what is genuinely
+                        # missing.
                         _LOGGER.debug(
-                            "Blok %d-%d geweigerd (%s); schakel over op losse reads",
+                            "Block %d-%d refused (%s); switching to individual reads",
                             block.start, block.start + block.count - 1, err,
                         )
                         self._split_blocks.add(block.start)
@@ -355,14 +353,14 @@ class ETAPproModbusClient:
     def _read_fields_individually(
         self, sock: socket.socket, fields: tuple[_Field, ...], data: dict[str, Any]
     ) -> None:
-        """Lees velden één voor één; onthoud welke de firmware niet kent."""
+        """Read fields one by one; remember which ones the firmware rejects."""
         for field in fields:
             span = field.length if field.kind == _STR else _REGISTER_SPAN[field.kind]
             try:
                 regs = self._read_holding_registers(sock, field.address, span)
             except ETAPproRegisterError as err:
                 _LOGGER.debug(
-                    "Register '%s' (adres %d) wordt niet ondersteund: %s",
+                    "Register '%s' (address %d) is not supported: %s",
                     field.key, field.address, err,
                 )
                 self._unsupported.add(field.key)
@@ -370,10 +368,10 @@ class ETAPproModbusClient:
             data[field.key] = self._decode(field, regs, field.address)
 
     def set_current_setpoint(self, ampere: float) -> None:
-        """Schrijf een nieuw laadstroom-setpoint naar register 1210.
+        """Write a new charging current setpoint to register 1210.
 
-        0 A    = laden pauzeren
-        >= 6 A = laden op de opgegeven stroom
+        0 A    = pause charging
+        >= 6 A = charge at the given current
         """
         with self._lock:
             sock = self._open_connection()
@@ -384,9 +382,9 @@ class ETAPproModbusClient:
                 sock.close()
 
     def set_phases(self, phases: int) -> None:
-        """Schrijf het aantal laadfasen naar register 1215 (1 of 3)."""
+        """Write the number of charging phases to register 1215 (1 or 3)."""
         if phases not in (1, 3):
-            raise ValueError(f"Ongeldig aantal fasen: {phases}. Moet 1 of 3 zijn.")
+            raise ValueError(f"Invalid phase count: {phases}. Must be 1 or 3.")
         with self._lock:
             sock = self._open_connection()
             try:

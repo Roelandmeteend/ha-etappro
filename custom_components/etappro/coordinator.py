@@ -1,4 +1,4 @@
-"""DataUpdateCoordinator voor de ETAPpro integratie."""
+"""DataUpdateCoordinator for the ETAPpro integration."""
 from __future__ import annotations
 
 import logging
@@ -15,17 +15,18 @@ _LOGGER = logging.getLogger(__name__)
 
 
 class ETAPproCoordinator(DataUpdateCoordinator[dict[str, Any]]):
-    """Haalt periodiek alle data op via Modbus TCP.
+    """Periodically fetches all data over Modbus TCP.
 
-    HA-sturing is gekoppeld aan een laadsessie:
-      - De sessie is actief zodra de lader laadt (IEC 61851 modus C) en blijft
-        actief tijdens pauzes (modus B) tot de auto loskoppelt (modus A).
-      - Alleen tijdens een actieve sessie schrijft de coordinator het gewenste
-        setpoint bij elke poll opnieuw (keepalive), zodat de lader de door HA /
-        automatiseringen ingestelde waarde niet naar zijn eigen config terugzet.
-      - Zodra de lader vrij is (modus A) laat HA volledig los: geen keepalive en
-        het gewenste setpoint wordt gewist, klaar voor een nieuwe sessie
-        (gestart via laadpas of de HA "Laden"-schakelaar).
+    HA control is tied to a charging session:
+      - The session is active as soon as the charger is charging (IEC 61851
+        mode C) and stays active through pauses (mode B) until the car is
+        unplugged (mode A).
+      - Only while a session is active does the coordinator re-write the
+        desired setpoint on every poll (keepalive), so the charger does not
+        revert the value set by HA or its automations to its own config.
+      - Once the charger is free (mode A) HA releases completely: no keepalive
+        and the desired setpoint is cleared, ready for a new session started
+        either by an RFID card or the HA "Charging" switch.
     """
 
     def __init__(
@@ -36,10 +37,10 @@ class ETAPproCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     ) -> None:
         self.client = client
         self.charger_name = charger_name
-        # Gewenste setpoint ingesteld vanuit HA/automatiseringen; wordt tijdens
-        # een actieve sessie bij elke poll hergeschreven als keepalive.
+        # Desired setpoint set from HA/automations; re-written on every poll as
+        # a keepalive while a session is active.
         self._desired_setpoint: float | None = None
-        # True zolang er een laadsessie loopt (modus C gezien, nog geen modus A).
+        # True while a charging session is running (mode C seen, no mode A yet).
         self._session_active: bool = False
 
         super().__init__(
@@ -50,15 +51,15 @@ class ETAPproCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         )
 
     def set_desired_setpoint(self, ampere: float | None) -> None:
-        """Sla het gewenste setpoint op; tijdens een sessie wordt dit als keepalive geschreven."""
+        """Store the desired setpoint; written as a keepalive during a session."""
         self._desired_setpoint = ampere
 
     async def _async_update_data(self) -> dict[str, Any]:
-        """Lees alle Modbus-registers en onderhoud de keepalive tijdens een sessie."""
+        """Read all Modbus registers and maintain the keepalive during a session."""
         try:
             data = await self.hass.async_add_executor_job(self.client.read_all)
         except ETAPproModbusError as err:
-            raise UpdateFailed(f"ETAPpro Modbus-fout: {err}") from err
+            raise UpdateFailed(f"ETAPpro Modbus error: {err}") from err
 
         self._update_session_state(data)
 
@@ -68,29 +69,29 @@ class ETAPproCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     self.client.set_current_setpoint, self._desired_setpoint
                 )
                 _LOGGER.debug(
-                    "ETAPpro keepalive: setpoint %.1f A hergeschreven", self._desired_setpoint
+                    "ETAPpro keepalive: setpoint %.1f A re-written", self._desired_setpoint
                 )
             except ETAPproModbusError as err:
-                _LOGGER.warning("ETAPpro keepalive mislukt: %s", err)
+                _LOGGER.warning("ETAPpro keepalive failed: %s", err)
 
         return data
 
     def _update_session_state(self, data: dict[str, Any]) -> None:
-        """Werk de sessie-latch bij op basis van de IEC 61851 modus.
+        """Update the session latch based on the IEC 61851 mode.
 
-        Modus A → vrij: sessie beëindigd, HA laat volledig los.
-        Modus C → laden: sessie actief.
-        Modus B (of fout E/F): latch ongewijzigd — pauze binnen een sessie
-            als die al liep, of nog geen sessie als er nog niet geladen is.
+        Mode A → free: session ended, HA releases completely.
+        Mode C → charging: session active.
+        Mode B (or fault E/F): latch unchanged — a pause within a session if one
+            was already running, or no session yet if charging never started.
         """
         mode_prefix = (data.get("mode") or "A")[:1].upper()
 
         if mode_prefix == "A":
             if self._session_active:
-                _LOGGER.info("ETAPpro: laadsessie beëindigd (lader vrij), HA laat los")
+                _LOGGER.info("ETAPpro: charging session ended (charger free), HA releases")
             self._session_active = False
             self._desired_setpoint = None
         elif mode_prefix == "C":
             if not self._session_active:
-                _LOGGER.info("ETAPpro: laadsessie gestart (modus C), HA-sturing actief")
+                _LOGGER.info("ETAPpro: charging session started (mode C), HA control active")
             self._session_active = True

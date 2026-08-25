@@ -1,4 +1,4 @@
-"""Switch platform voor de ETAPpro — laden starten en pauzeren."""
+"""Switch platform for the ETAPpro — start and pause charging."""
 from __future__ import annotations
 
 import logging
@@ -30,11 +30,11 @@ async def async_setup_entry(
 
 
 class ETAPproChargingSwitch(CoordinatorEntity[ETAPproCoordinator], SwitchEntity):
-    """Schakelaar om laden te starten of te pauzeren.
+    """Switch to start or pause charging.
 
-    AAN  — herstelt het laatste setpoint (minimaal 6 A) naar register 1210.
-           Dit is één van de twee manieren om een sessie te starten.
-    UIT  — schrijft 0 A naar register 1210, waardoor laden pauzeert.
+    ON  — restores the last setpoint (at least 6 A) to register 1210. This is
+          one of the two ways a session can be started.
+    OFF — writes 0 A to register 1210, which pauses charging.
     """
 
     _attr_has_entity_name = True
@@ -54,7 +54,7 @@ class ETAPproChargingSwitch(CoordinatorEntity[ETAPproCoordinator], SwitchEntity)
 
     @property
     def is_on(self) -> bool | None:
-        """True als de lader actief laadt (IEC 61851 modus C)."""
+        """True when the charger is actively charging (IEC 61851 mode C)."""
         if self.coordinator.data is None:
             return None
         mode = (self.coordinator.data.get("mode") or "").strip().upper()
@@ -62,7 +62,7 @@ class ETAPproChargingSwitch(CoordinatorEntity[ETAPproCoordinator], SwitchEntity)
 
     @property
     def available(self) -> bool:
-        """Alleen beschikbaar als een auto aangesloten is (modus B of C)."""
+        """Only available when a car is connected (mode B or C)."""
         if not self.coordinator.last_update_success or self.coordinator.data is None:
             return False
         mode = (self.coordinator.data.get("mode") or "").strip().upper()
@@ -73,32 +73,32 @@ class ETAPproChargingSwitch(CoordinatorEntity[ETAPproCoordinator], SwitchEntity)
         return {"resume_setpoint_a": self._last_setpoint}
 
     async def async_turn_on(self, **kwargs) -> None:
-        """Hervat/start laden met het vorige setpoint (minimaal 6 A)."""
+        """Start/resume charging at the previous setpoint (at least 6 A)."""
         setpoint = max(self._last_setpoint, MIN_CURRENT_A)
-        _LOGGER.debug("ETAPpro: laden starten op %.1f A", setpoint)
+        _LOGGER.debug("ETAPpro: starting charging at %.1f A", setpoint)
         try:
             await self.hass.async_add_executor_job(
                 self.coordinator.client.set_current_setpoint, setpoint
             )
         except ETAPproModbusError as err:
-            _LOGGER.error("ETAPpro: laden starten mislukt: %s", err)
+            _LOGGER.error("ETAPpro: failed to start charging: %s", err)
             return
         self.coordinator.set_desired_setpoint(setpoint)
         await self.coordinator.async_request_refresh()
 
     async def async_turn_off(self, **kwargs) -> None:
-        """Pauzeer laden door 0 A naar register 1210 te schrijven."""
+        """Pause charging by writing 0 A to register 1210."""
         if self.coordinator.data:
             current = self.coordinator.data.get("setpoint_current")
             if current and current > 0:
                 self._last_setpoint = current
-        _LOGGER.debug("ETAPpro: laden pauzeren (setpoint was %.1f A)", self._last_setpoint)
+        _LOGGER.debug("ETAPpro: pausing charging (setpoint was %.1f A)", self._last_setpoint)
         try:
             await self.hass.async_add_executor_job(
                 self.coordinator.client.set_current_setpoint, 0
             )
         except ETAPproModbusError as err:
-            _LOGGER.error("ETAPpro: laden pauzeren mislukt: %s", err)
+            _LOGGER.error("ETAPpro: failed to pause charging: %s", err)
             return
         self.coordinator.set_desired_setpoint(0)
         await self.coordinator.async_request_refresh()
