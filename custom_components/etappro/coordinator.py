@@ -5,11 +5,13 @@ import logging
 from datetime import timedelta
 from typing import Any
 
+from modbus_connection import ModbusError
+
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .const import DOMAIN, SCAN_INTERVAL_FAST
-from .modbus_client import ETAPproModbusClient, ETAPproModbusError
+from .device import ETAPproDevice
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -31,10 +33,10 @@ class ETAPproCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     def __init__(
         self,
         hass: HomeAssistant,
-        client: ETAPproModbusClient,
+        device: ETAPproDevice,
         charger_name: str,
     ) -> None:
-        self.client = client
+        self.device = device
         self.charger_name = charger_name
         # Gewenste setpoint ingesteld vanuit HA/automatiseringen; wordt tijdens
         # een actieve sessie bij elke poll hergeschreven als keepalive.
@@ -56,21 +58,19 @@ class ETAPproCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     async def _async_update_data(self) -> dict[str, Any]:
         """Lees alle Modbus-registers en onderhoud de keepalive tijdens een sessie."""
         try:
-            data = await self.hass.async_add_executor_job(self.client.read_all)
-        except ETAPproModbusError as err:
+            data = await self.device.async_read_all()
+        except ModbusError as err:
             raise UpdateFailed(f"ETAPpro Modbus-fout: {err}") from err
 
         self._update_session_state(data)
 
         if self._session_active and self._desired_setpoint is not None:
             try:
-                await self.hass.async_add_executor_job(
-                    self.client.set_current_setpoint, self._desired_setpoint
-                )
+                await self.device.async_set_current_setpoint(self._desired_setpoint)
                 _LOGGER.debug(
                     "ETAPpro keepalive: setpoint %.1f A hergeschreven", self._desired_setpoint
                 )
-            except ETAPproModbusError as err:
+            except ModbusError as err:
                 _LOGGER.warning("ETAPpro keepalive mislukt: %s", err)
 
         return data

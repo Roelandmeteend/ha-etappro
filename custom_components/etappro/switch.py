@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import logging
 
+from modbus_connection import ModbusError
+
 from homeassistant.components.switch import SwitchEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
@@ -12,7 +14,6 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN, MIN_CURRENT_A
 from .coordinator import ETAPproCoordinator
-from .modbus_client import ETAPproModbusError
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -77,10 +78,8 @@ class ETAPproChargingSwitch(CoordinatorEntity[ETAPproCoordinator], SwitchEntity)
         setpoint = max(self._last_setpoint, MIN_CURRENT_A)
         _LOGGER.debug("ETAPpro: laden starten op %.1f A", setpoint)
         try:
-            await self.hass.async_add_executor_job(
-                self.coordinator.client.set_current_setpoint, setpoint
-            )
-        except ETAPproModbusError as err:
+            await self.coordinator.device.async_set_current_setpoint(setpoint)
+        except ModbusError as err:
             _LOGGER.error("ETAPpro: laden starten mislukt: %s", err)
             return
         self.coordinator.set_desired_setpoint(setpoint)
@@ -94,10 +93,8 @@ class ETAPproChargingSwitch(CoordinatorEntity[ETAPproCoordinator], SwitchEntity)
                 self._last_setpoint = current
         _LOGGER.debug("ETAPpro: laden pauzeren (setpoint was %.1f A)", self._last_setpoint)
         try:
-            await self.hass.async_add_executor_job(
-                self.coordinator.client.set_current_setpoint, 0
-            )
-        except ETAPproModbusError as err:
+            await self.coordinator.device.async_set_current_setpoint(0)
+        except ModbusError as err:
             _LOGGER.error("ETAPpro: laden pauzeren mislukt: %s", err)
             return
         self.coordinator.set_desired_setpoint(0)

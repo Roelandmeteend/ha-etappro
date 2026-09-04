@@ -6,12 +6,15 @@ from typing import Any
 
 import voluptuous as vol
 
+from modbus_connection import ModbusError
+
 from homeassistant import config_entries
+from homeassistant.components.modbus import async_get_temporary_unit
 from homeassistant.const import CONF_HOST, CONF_PORT, CONF_SCAN_INTERVAL
 from homeassistant.core import callback
 
 from .const import DEFAULT_PORT, DOMAIN, SCAN_INTERVAL_FAST
-from .modbus_client import ETAPproModbusClient, ETAPproModbusError
+from .device import UNIT_ID, async_test_connection, connection_params
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -31,10 +34,14 @@ class ETAPproConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             host = user_input[CONF_HOST].strip()
             port = user_input[CONF_PORT]
 
-            client = ETAPproModbusClient(host, port)
+            # A connection already held by a config entry is shared and stays
+            # up; one opened here is closed again when the context exits.
             try:
-                await self.hass.async_add_executor_job(client.test_connection)
-            except ETAPproModbusError as err:
+                async with async_get_temporary_unit(
+                    self.hass, connection_params(host, port), UNIT_ID
+                ) as unit:
+                    await async_test_connection(unit)
+            except ModbusError as err:
                 _LOGGER.warning("ETAPpro connection test failed: %s", err)
                 errors["base"] = "cannot_connect"
             except Exception:
@@ -51,8 +58,6 @@ class ETAPproConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                         CONF_PORT: port,
                     },
                 )
-            finally:
-                client.disconnect()
 
         schema = vol.Schema(
             {
