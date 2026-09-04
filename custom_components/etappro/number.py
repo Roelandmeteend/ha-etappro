@@ -73,9 +73,7 @@ class ETAPproCurrentSetpoint(CoordinatorEntity[ETAPproCoordinator], NumberEntity
 
     async def async_set_native_value(self, value: float) -> None:
         """Write the new setpoint to register 1210."""
-        await self.hass.async_add_executor_job(
-            self.coordinator.client.set_current_setpoint, value
-        )
+        await self.coordinator.device.async_set_current_setpoint(value)
         self.coordinator.set_desired_setpoint(value)
         await self.coordinator.async_request_refresh()
 
@@ -116,7 +114,5 @@ class ETAPproPhases(CoordinatorEntity[ETAPproCoordinator], NumberEntity):
         phases = int(value)
         if phases not in (1, 3):
             phases = 1 if phases < 2 else 3
-        await self.hass.async_add_executor_job(
-            self.coordinator.client.set_phases, phases
-        )
+        await self.coordinator.device.async_set_phases(phases)
         await self.coordinator.async_request_refresh()

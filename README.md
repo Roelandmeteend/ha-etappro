@@ -11,6 +11,18 @@ Disclaimer: This integration was made with support of AI tools
 
 ---
 
+## Requirements
+
+**Home Assistant 2026.9 or newer.** The integration talks to the charger over a
+Modbus connection shared through the core `modbus` integration, which was
+introduced in that release. The ETAPpro accepts only one Modbus connection at a
+time, so sharing it means another consumer on the same charger — the YAML
+`modbus` integration, an energy manager — no longer competes with this
+integration for the bus.
+
+Nothing needs to be added to `configuration.yaml`: the shared connection is set
+up automatically and closes again when the last integration using it unloads.
+
 ## Installation via HACS
 
 1. Go to **HACS → Integrations** in Home Assistant
@@ -72,4 +84,18 @@ After installation, click the **gear icon (⚙)** on the integration card to adj
 logger:
   logs:
     custom_components.etappro: debug
+```
+
+**"Modbus device ... is already in use with different link settings":**
+another integration already holds a connection to this charger on a different
+port or framing. Both cannot be honoured on one connection — point them at the
+same host and port.
+
+## Development
+
+The register model is covered by tests that run without Home Assistant:
+
+```bash
+python3 -m venv .venv && .venv/bin/pip install -r requirements-test.txt
+.venv/bin/python -m pytest
 ```

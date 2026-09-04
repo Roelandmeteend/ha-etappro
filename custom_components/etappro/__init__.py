@@ -1,6 +1,7 @@
 """ETAPpro EV Charger integration for Home Assistant.
 
-Communicates via Modbus TCP with the ETAPpro charger by EVchargeking.
+Communicates via Modbus TCP with the ETAPpro charger by EVchargeking, over a
+connection shared with any other integration talking to the same charger.
 No cloud, no API key — only the local IP address of the charger is required.
 """
 from __future__ import annotations
@@ -8,13 +9,14 @@ from __future__ import annotations
 import logging
 from datetime import timedelta
 
+from homeassistant.components.modbus import async_get_unit
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_HOST, CONF_PORT, CONF_SCAN_INTERVAL, Platform
 from homeassistant.core import HomeAssistant
 
 from .const import DOMAIN, SCAN_INTERVAL_FAST, VERSION
 from .coordinator import ETAPproCoordinator
-from .modbus_client import ETAPproModbusClient
+from .device import UNIT_ID, ETAPproDevice, connection_params
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -24,17 +26,24 @@ PLATFORMS = [Platform.SENSOR, Platform.NUMBER, Platform.SWITCH]
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up the ETAPpro integration from a config entry."""
     _LOGGER.debug("ETAPpro integration version %s starting", VERSION)
-    host = entry.data[CONF_HOST]
-    port = entry.data[CONF_PORT]
 
-    client = ETAPproModbusClient(host, port)
+    # Asking for a unit performs no I/O: a charger that is powered down does not
+    # stop the integration from setting up. The hold is released when this entry
+    # unloads, and the connection closes behind the last holder.
+    unit = async_get_unit(
+        hass,
+        entry,
+        connection_params(entry.data[CONF_HOST], entry.data[CONF_PORT]),
+        UNIT_ID,
+    )
+    device = ETAPproDevice(unit)
 
     # Use custom scan interval if set via the options flow
     scan_interval = entry.options.get(CONF_SCAN_INTERVAL, SCAN_INTERVAL_FAST)
 
     coordinator = ETAPproCoordinator(
         hass,
-        client,
+        device,
         charger_name=entry.title,
     )
     coordinator.update_interval = timedelta(seconds=scan_interval)
@@ -60,6 +69,5 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload the ETAPpro integration."""
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unload_ok:
-        coordinator: ETAPproCoordinator = hass.data[DOMAIN].pop(entry.entry_id)
-        await hass.async_add_executor_job(coordinator.client.disconnect)
+        hass.data[DOMAIN].pop(entry.entry_id)
     return unload_ok

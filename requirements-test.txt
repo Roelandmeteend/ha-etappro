@@ -1,0 +1,4 @@
+# De versie die Home Assistant 2026.9 meelevert met de core modbus-integratie.
+modbus-connection==4.10.0
+pytest
+pytest-asyncio
